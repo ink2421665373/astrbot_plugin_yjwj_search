@@ -7,6 +7,7 @@ import os
 import aiohttp
 import asyncio
 import json
+import urllib.parse
 from datetime import datetime
 
 class NarakaSearchPlugin(Star):
@@ -69,7 +70,8 @@ class NarakaSearchPlugin(Star):
             return None
 
     async def get_role_id(self, player_name):
-        url = f'{self.SEARCH_API}?name={player_name}'
+        encoded_name = urllib.parse.quote(player_name)
+        url = f'{self.SEARCH_API}?name={encoded_name}'
         text = await self.fetch_url(url)
         if not text:
             return {'role_id': 0, 'role_name': '', 'error': '网络请求失败'}
