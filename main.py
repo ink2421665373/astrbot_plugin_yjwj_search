@@ -1,4 +1,4 @@
-from astrbot.api.event import filter, AstrMessageEvent
+wfrom astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api import logger
 from astrbot.api import AstrBotConfig
@@ -159,7 +159,7 @@ class NarakaSearchPlugin(Star):
                         "total_users_count": battle.get('totalPlayers', 0),
                         "kill_times": battle.get('kill', 0),
                         "grade": battle.get('rating', ''),
-                        "rating_delta": battle.get('roundRankScore', 0) - battle.get('beginRankScore', 0),
+                        "rating_delta": (battle.get('roundRankScore') or 0) - (battle.get('beginRankScore') or 0),
                         "match_id": battle.get('battleId', '')
                     }
                     matches.append(battle_info)
