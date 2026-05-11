@@ -135,35 +135,62 @@ class NarakaSearchPlugin(Star):
             return team_result.get('data')
         return None
 
-    async def get_result(self, player_id_in, mode_in, season_in):
-        battles_url = f'{self.RECENT_BATTLES_API}?roleId={player_id_in}&pageIndex=1&pageSize=10'
+    async def get_result(self, player_id_in, mode_in, season_in, mode_codes=None):
+        matches = []
+        page_index = 1
+        max_pages = 10  
+        target_count = 10  
+        
         async with aiohttp.ClientSession() as session:
-            async with session.get(battles_url) as r:
-                battles_text = await r.text()
+            while page_index <= max_pages and len(matches) < target_count:
+                battles_url = f'{self.RECENT_BATTLES_API}?roleId={player_id_in}&pageIndex={page_index}&pageSize=20'
                 try:
-                    battles_result = json.loads(battles_text)
-                except json.JSONDecodeError:
-                    return {'status': 'error', 'result': {'code': 500, 'errmsg': 'JSON解析失败'}}
-                if battles_result.get('code') != 200 or not battles_result.get('data'):
-                    return {'status': 'error', 'result': {'code': battles_result.get('code', 500), 'errmsg': battles_result.get('msg', '获取失败')}}
-                battles_data = battles_result.get('data', {}).get('list', [])
-                matches = []
-                for battle in battles_data:
-                    battle_info = {
-                        "battle_tid": str(battle.get('gameMode', '')),
-                        "hero_id": str(battle.get('hero', {}).get('heroId', '')),
-                        "time": str(int(battle.get('battleEndTime', 0)/1000)),
-                        "map_name": battle.get('mapName', '未知'),
-                        "damage": battle.get('damage', 0),
-                        "rank": battle.get('rank', 0),
-                        "total_users_count": battle.get('totalPlayers', 0),
-                        "kill_times": battle.get('kill', 0),
-                        "grade": battle.get('rating', ''),
-                        "rating_delta": (battle.get('roundRankScore') or 0) - (battle.get('beginRankScore') or 0),
-                        "match_id": battle.get('battleId', '')
-                    }
-                    matches.append(battle_info)
-                return {'status': 'ok', 'result': {'player_info': {'name': '未知', 'rating': '未知', 'level': '未知'}, 'matches': matches}}
+                    async with session.get(battles_url) as r:
+                        if r.status != 200:
+                            logger.error(f"HTTP错误: {r.status}")
+                            break
+                        battles_text = await r.text()
+                        try:
+                            battles_result = json.loads(battles_text)
+                        except json.JSONDecodeError:
+                            logger.error("JSON解析失败")
+                            break
+                        if battles_result.get('code') != 200 or not battles_result.get('data'):
+                            break
+                        battles_data = battles_result.get('data', {}).get('list', [])
+                        if not battles_data:
+                            break
+                        
+                        for battle in battles_data:
+                            battle_tid = str(battle.get('gameMode', ''))
+                            
+                            if mode_codes and battle_tid not in mode_codes:
+                                continue
+                            
+                            battle_info = {
+                                "battle_tid": battle_tid,
+                                "hero_id": str(battle.get('hero', {}).get('heroId', '')),
+                                "time": str(int(battle.get('battleEndTime', 0)/1000)),
+                                "map_name": battle.get('mapName', '未知'),
+                                "damage": battle.get('damage', 0),
+                                "rank": battle.get('rank', 0),
+                                "total_users_count": battle.get('totalPlayers', 0),
+                                "kill_times": battle.get('kill', 0),
+                                "grade": battle.get('rating', ''),
+                                "rating_delta": (battle.get('roundRankScore') or 0) - (battle.get('beginRankScore') or 0),
+                                "match_id": battle.get('battleId', '')
+                            }
+                            matches.append(battle_info)
+                            
+                            if len(matches) >= target_count:
+                                break
+                            
+                        page_index += 1
+                except Exception as e:
+                    logger.error(f"获取战绩数据失败: {str(e)}")
+                    break
+        
+        return {'status': 'ok', 'result': {'player_info': {'name': '未知', 'rating': '未知', 'level': '未知'}, 'matches': matches[:target_count]}}
 
     @filter.command("yj")
     async def naraka_search(self, event: AstrMessageEvent):
@@ -221,13 +248,10 @@ class NarakaSearchPlugin(Star):
             if selected_mode_codes:
                 stats_data = await self.get_stats(player_id, selected_mode_codes[0])
 
-            res = await self.get_result(player_id, '5000001', 'chuanyun')
+            res = await self.get_result(player_id, '5000001', 'chuanyun', selected_mode_codes if (mode_filter and selected_mode_codes) else None)
             result_data = res['result']
 
             matches = result_data.get('matches', [])
-
-            if mode_filter and selected_mode_codes:
-                matches = [m for m in matches if m.get('battle_tid') in selected_mode_codes]
 
             msg_parts = []
             msg_parts.append("⚔️ 永劫无间战绩 ⚔️")
