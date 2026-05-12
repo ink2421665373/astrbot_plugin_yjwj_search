@@ -144,8 +144,9 @@ class NarakaSearchPlugin(Star):
     async def get_result(self, player_id_in, mode_in, season_in, mode_codes=None):
         matches = []
         page_index = 1
-        max_pages = 10  
+        max_pages = 20  
         target_count = 10  
+        all_game_modes = set()
         
         async with aiohttp.ClientSession() as session:
             while page_index <= max_pages and len(matches) < target_count:
@@ -170,10 +171,16 @@ class NarakaSearchPlugin(Star):
                             break
                         
                         logger.info(f"第{page_index}页获取到{len(battles_data)}条记录, 期望模式: {mode_codes}")
+                        if battles_data and page_index == 1:
+                            logger.info(f"第一条记录的键: {list(battles_data[0].keys())}")
+                            logger.info(f"第一条记录的gameMode值: {battles_data[0].get('gameMode', '不存在')}")
+                            logger.info(f"第一条记录的gameMode类型: {type(battles_data[0].get('gameMode'))}")
                         
                         for battle in battles_data:
                             battle_tid = battle.get('gameMode', '')
                             battle_tid_str = str(battle_tid) if battle_tid else ''
+                            all_game_modes.add(battle_tid_str)
+
                             
                             logger.info(f"检查记录: gameMode={battle_tid} (类型: {type(battle_tid)}), battleId={battle.get('battleId', '')}")
                             
@@ -222,7 +229,8 @@ class NarakaSearchPlugin(Star):
                     break
         
         logger.info(f"最终返回{len(matches)}条匹配记录")
-        return {'status': 'ok', 'result': {'player_info': {'name': '未知', 'rating': '未知', 'level': '未知'}, 'matches': matches[:target_count]}}
+        logger.info(f"总共翻页: {page_index-1}页, 扫描到的模式: {all_game_modes}")
+        return {'status': 'ok', 'result': {'player_info': {'name': '未知', 'rating': '未知', 'level': '未知'}, 'matches': matches[:target_count], 'all_game_modes': list(all_game_modes)}}
 
     @filter.command("yj")
     async def naraka_search(self, event: AstrMessageEvent):
