@@ -196,7 +196,7 @@ class NarakaSearchPlugin(Star):
     async def naraka_search(self, event: AstrMessageEvent):
         message = event.message_str.strip()
         if not message:
-            yield event.plain_result("📖 使用说明\n━━━━━━━━━━━━\n命令：/yj [模式] <角色名>\n示例：/yj 冬眠岛\n示例：/yj 三排 冬眠岛\n可用模式：单排、双排、三排、天选、匹配、天人\n━━━━━━━━━━━━")
+            yield event.plain_result("📖 使用说明\n━━━━━━━━━━━━\n命令：/yj [详细数据] [模式] <角色名>\n示例：/yj 冬眠岛\n示例：/yj 三排 冬眠岛\n示例：/yj 详细数据 冬眠岛\n示例：/yj 详细数据 三排 冬眠岛\n可用模式：单排、双排、三排、天选、匹配、天人\n━━━━━━━━━━━━")
             return
 
         clean_message = message
@@ -206,34 +206,65 @@ class NarakaSearchPlugin(Star):
             clean_message = clean_message[2:].strip()
 
         if not clean_message:
-            yield event.plain_result("📖 使用说明\n━━━━━━━━━━━━\n命令：/yj [模式] <角色名>\n示例：/yj 冬眠岛\n示例：/yj 三排 冬眠岛\n可用模式：单排、双排、三排、天选、匹配、天人\n━━━━━━━━━━━━")
+            yield event.plain_result("📖 使用说明\n━━━━━━━━━━━━\n命令：/yj [详细数据] [模式] <角色名>\n示例：/yj 冬眠岛\n示例：/yj 三排 冬眠岛\n示例：/yj 详细数据 冬眠岛\n示例：/yj 详细数据 三排 冬眠岛\n可用模式：单排、双排、三排、天选、匹配、天人\n━━━━━━━━━━━━")
             return
 
         player_name = clean_message
         mode_filter = None
         mode_display = '全部模式'
         selected_mode_codes = []
+        detail_mode = False
 
-        parts = clean_message.split(' ', 1)
-        if len(parts) == 2:
-            first_part = parts[0]
-            second_part = parts[1]
+        parts = clean_message.split(' ', 2)
+        
+        if len(parts) >= 1 and parts[0] == '详细数据':
+            detail_mode = True
+            remaining = ' '.join(parts[1:]).strip() if len(parts) > 1 else ''
             
-            if first_part in self.mode_aliases:
-                mode_filter = first_part
-                player_name = second_part
-                selected_mode_codes = self.mode_aliases[first_part]
-                mode_display = first_part
-            elif first_part in self.mode_names.values():
-                for code, name in self.mode_names.items():
-                    if name == first_part:
+            if remaining:
+                sub_parts = remaining.split(' ', 1)
+                if len(sub_parts) == 2:
+                    first_part = sub_parts[0]
+                    second_part = sub_parts[1]
+                    
+                    if first_part in self.mode_aliases:
                         mode_filter = first_part
-                        selected_mode_codes = [code]
-                        break
-                player_name = second_part
-                mode_display = first_part
+                        player_name = second_part
+                        selected_mode_codes = self.mode_aliases[first_part]
+                        mode_display = first_part
+                    elif first_part in self.mode_names.values():
+                        for code, name in self.mode_names.items():
+                            if name == first_part:
+                                mode_filter = first_part
+                                selected_mode_codes = [code]
+                                break
+                        player_name = second_part
+                        mode_display = first_part
+                    else:
+                        player_name = remaining
+                else:
+                    player_name = remaining
+        else:
+            parts = clean_message.split(' ', 1)
+            if len(parts) == 2:
+                first_part = parts[0]
+                second_part = parts[1]
+                
+                if first_part in self.mode_aliases:
+                    mode_filter = first_part
+                    player_name = second_part
+                    selected_mode_codes = self.mode_aliases[first_part]
+                    mode_display = first_part
+                elif first_part in self.mode_names.values():
+                    for code, name in self.mode_names.items():
+                        if name == first_part:
+                            mode_filter = first_part
+                            selected_mode_codes = [code]
+                            break
+                    player_name = second_part
+                    mode_display = first_part
 
-        logger.info(f"查询角色: {player_name}, 模式: {mode_display}")
+        logger.info(f"查询角色: {player_name}, 模式: {mode_display}, 详细模式: {detail_mode}")
 
         try:
             role_data = await self.get_role_id(player_name)
@@ -317,7 +348,7 @@ class NarakaSearchPlugin(Star):
                     msg_parts.append(f"     │ 排名{rank} │ 击杀{kill_times} │ 伤害{damage}")
                     msg_parts.append(f"     │ {grade}级 │ {delta_str}分")
 
-                    if match_id:
+                    if detail_mode and match_id:
                         detail_data = await self.get_battle_detail(player_id, match_id)
                         if detail_data:
                             data_list = detail_data.get('dataList', [])
@@ -361,7 +392,6 @@ class NarakaSearchPlugin(Star):
                                 if honor_names:
                                     msg_parts.append(f"     ├─ 称号: {'、'.join(honor_names)}")
                             
-                            # 获取队友数据
                             team_data = await self.get_battle_detail_team(player_id, match_id)
                             if team_data:
                                 teammates = team_data.get('teammates', [])
@@ -372,7 +402,6 @@ class NarakaSearchPlugin(Star):
                                         hero_name = hero.get('heroName', '未知')
                                         role = teammate.get('role', {})
                                         role_name = role.get('roleName', '未知')
-                                        is_me = teammate.get('isMe', False)
                                         
                                         tm_data_list = teammate.get('dataList', [])
                                         tm_data_dict = {item['name']: item['value'] for item in tm_data_list}
