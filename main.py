@@ -33,6 +33,12 @@ class NarakaSearchPlugin(Star):
         '天人单排': ['4'],
         '天人双排': ['13'],
         '天人三排': ['5'],
+        '单排': ['1', '4'],
+        '双排': ['12', '13'],
+        '三排': ['2', '5'],
+        '天选': ['1', '2', '12'],
+        '天人': ['4', '5', '13'],
+        
     }
     hero_names = {
         '1000001': '胡桃', '1000003': '宁红夜', '1000004': '迦南',
@@ -156,16 +162,40 @@ class NarakaSearchPlugin(Star):
                             logger.error("JSON解析失败")
                             break
                         if battles_result.get('code') != 200 or not battles_result.get('data'):
+                            logger.error(f"API返回错误: {battles_result.get('code')}, msg: {battles_result.get('msg')}")
                             break
                         battles_data = battles_result.get('data', {}).get('list', [])
                         if not battles_data:
+                            logger.info(f"第{page_index}页无数据")
                             break
                         
+                        logger.info(f"第{page_index}页获取到{len(battles_data)}条记录, 期望模式: {mode_codes}")
+                        
                         for battle in battles_data:
-                            battle_tid = str(battle.get('gameMode', ''))
+                            battle_tid = battle.get('gameMode', '')
+                            battle_tid_str = str(battle_tid) if battle_tid else ''
                             
-                            if mode_codes and battle_tid not in mode_codes:
-                                continue
+                            logger.info(f"检查记录: gameMode={battle_tid} (类型: {type(battle_tid)}), battleId={battle.get('battleId', '')}")
+                            
+                            if mode_codes:
+                                match_found = False
+                                for code in mode_codes:
+                                    code_str = str(code)
+                                    logger.info(f"  比较: '{battle_tid_str}' == '{code_str}' ? {battle_tid_str == code_str}")
+                                    if battle_tid_str == code_str:
+                                        match_found = True
+                                        break
+                                    if battle_tid_str == str(int(code_str)):
+                                        match_found = True
+                                        break
+                                    if isinstance(battle_tid, int) and int(code_str) == battle_tid:
+                                        match_found = True
+                                        break
+                                if not match_found:
+                                    logger.info(f"  跳过: gameMode={battle_tid} 不在 {mode_codes} 中")
+                                    continue
+                                else:
+                                    logger.info(f"  匹配成功!")
                             
                             battle_info = {
                                 "battle_tid": battle_tid,
@@ -181,6 +211,7 @@ class NarakaSearchPlugin(Star):
                                 "match_id": battle.get('battleId', '')
                             }
                             matches.append(battle_info)
+                            logger.info(f"  添加匹配记录, 当前共{len(matches)}条")
                             
                             if len(matches) >= target_count:
                                 break
@@ -190,6 +221,7 @@ class NarakaSearchPlugin(Star):
                     logger.error(f"获取战绩数据失败: {str(e)}")
                     break
         
+        logger.info(f"最终返回{len(matches)}条匹配记录")
         return {'status': 'ok', 'result': {'player_info': {'name': '未知', 'rating': '未知', 'level': '未知'}, 'matches': matches[:target_count]}}
 
     @filter.command("yj")
@@ -264,7 +296,7 @@ class NarakaSearchPlugin(Star):
                     player_name = second_part
                     mode_display = first_part
 
-        logger.info(f"查询角色: {player_name}, 模式: {mode_display}, 详细模式: {detail_mode}")
+        logger.info(f"查询角色: {player_name}, 模式: {mode_display}, 详细模式: {detail_mode}, 模式代码: {selected_mode_codes}")
 
         try:
             role_data = await self.get_role_id(player_name)
