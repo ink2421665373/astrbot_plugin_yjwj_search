@@ -1,0 +1,17 @@
+name: astrbot_plugin_yjwj_search
+display_name: 永劫无间战绩查询
+author: original author
+desc: 永劫无间游戏战绩查询工具
+type: star
+version: "1.0.0"
+repo: "https://github.com/example/astrbot_plugin_yjwj_search"
+astrbot_version: ">=4.16"
+support_platforms:
+  - telegram
+  - discord
+  - qq_official
+  - wecom
+  - lark
+  - dingtalk
+main: main.py
+plugin: NarakaSearchPlugin

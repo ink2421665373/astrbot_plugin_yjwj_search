@@ -1,0 +1,491 @@
+from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.star import Context, Star
+from astrbot.api import logger
+from astrbot.api import AstrBotConfig
+import sys
+import os
+import aiohttp
+import asyncio
+import json
+import urllib.parse
+from datetime import datetime
+
+class NarakaSearchPlugin(Star):
+    def __init__(self, context: Context, config: AstrBotConfig = None):
+        super().__init__(context)
+        logger.info("永劫无间战绩查询插件初始化成功")
+
+    SEARCH_API = 'https://naraka.drivod.top/api/record/search'
+    RECENT_BATTLES_API = 'https://naraka.drivod.top/api/record/mini-program/battle/recent'
+    STATS_API = 'https://naraka.drivod.top/api/record/mini-program/stats'
+    BATTLE_DETAIL_API = 'https://naraka.drivod.top/api/record/mini-program/battle/detail/person'
+    
+    ROLE_ID_FIELD = 'roleIdSimple'
+
+    mode_names = {
+        '101': '天选单排', '102': '天选双排', '103': '天选三排',
+        '401': '天人单排', '402': '天人双排', '403': '天人三排'
+    }
+    
+    mode_aliases = {
+        '天选单排': ['101'],
+        '天选双排': ['102'],
+        '天选三排': ['103'],
+        '天人单排': ['401'],
+        '天人双排': ['402'],
+        '天人三排': ['403'],
+        
+    }
+    hero_names = {
+        '1000001': '胡桃', '1000003': '宁红夜', '1000004': '迦南',
+        '1000005': '特木尔', '1000006': '季沧海', '1000007': '天海',
+        '1000008': '天海','1000009': '妖刀姬', '1000010': '崔三娘', 
+        '1000011': '岳山','1000012': '岳山','1000013': '无尘', 
+        '1000015': '顾清寒', '1000016': '武田信忠','1000017': '殷紫萍', 
+        '1000018': '沈妙', '1000019': '沈妙','1000020': '胡为',
+        '1000021': '季莹莹', '1000022': '玉玲珑','1000023': '哈迪',
+        '1000024': '魏青','1000025': '刘炼', '1000026': '张起灵', 
+        '1000027': '席拉','1000028': '蓝梦','1000029': '万钧', 
+        '1000030': '万钧','1000031': '李寻欢', '1000032': '巫真',
+        '1000033': '甘璇'
+      
+    }
+
+    async def fetch_url(self, url, timeout=10):
+        try:
+            timeout = aiohttp.ClientTimeout(total=timeout)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as r:
+                    if r.status != 200:
+                        logger.error(f"HTTP错误: {r.status}")
+                        return None
+                    text = await r.text()
+                    return text
+        except aiohttp.ClientError as e:
+            logger.error(f"网络错误: {str(e)}")
+            return None
+        except asyncio.TimeoutError:
+            logger.error("请求超时")
+            return None
+        except Exception as e:
+            logger.error(f"未知错误: {str(e)}")
+            return None
+
+    async def get_role_id(self, player_name):
+        encoded_name = urllib.parse.quote(player_name)
+        url = f'{self.SEARCH_API}?name={encoded_name}'
+        text = await self.fetch_url(url)
+        if not text:
+            return {'role_id': '', 'role_name': '', 'error': '网络请求失败'}
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            logger.error("JSON解析失败")
+            return {'role_id': '', 'role_name': '', 'error': '数据解析失败'}
+        if result.get('code') == 200 and result.get('data'):
+            data = result.get('data')
+            if isinstance(data, dict):
+                role_id = data.get('roleIdSimple') or data.get('roleIdMiniProgram') or data.get('roleId')
+                role_name = data.get('roleName', '')
+                if role_id:
+                    return {'role_id': role_id, 'role_name': role_name}
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        role_id = item.get('roleIdSimple') or item.get('roleIdMiniProgram') or item.get('roleId')
+                        role_name = item.get('roleName', '')
+                        if role_id:
+                            return {'role_id': role_id, 'role_name': role_name}
+        return {'role_id': '', 'role_name': '', 'error': '未找到角色'}
+
+    async def get_stats(self, player_id_in, game_mode):
+        stats_url = f'{self.STATS_API}?{self.ROLE_ID_FIELD}={player_id_in}&gameMode={game_mode}&seasonId=9620020'
+        text = await self.fetch_url(stats_url)
+        if not text:
+            return None
+        try:
+            stats_result = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if stats_result.get('code') == 200 and stats_result.get('data'):
+            return stats_result.get('data')
+        return None
+
+    async def get_battle_detail(self, player_id_in, battle_id):
+        detail_url = f'{self.BATTLE_DETAIL_API}?{self.ROLE_ID_FIELD}={player_id_in}&battleId={battle_id}'
+        text = await self.fetch_url(detail_url, timeout=8)
+        if not text:
+            return None
+        try:
+            detail_result = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if detail_result.get('code') == 200 and detail_result.get('data'):
+            return detail_result.get('data')
+        return None
+
+    async def get_battle_detail_team(self, player_id_in, battle_id):
+        team_detail_url = f'{self.BATTLE_DETAIL_API.replace("/person", "/team")}?{self.ROLE_ID_FIELD}={player_id_in}&battleId={battle_id}'
+        text = await self.fetch_url(team_detail_url, timeout=8)
+        if not text:
+            return None
+        try:
+            team_result = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if team_result.get('code') == 200 and team_result.get('data'):
+            return team_result.get('data')
+        return None
+
+    async def get_result(self, player_id_in, mode_in, season_in, mode_codes=None):
+        matches = []
+        page_index = 1
+        max_pages = 20  
+        target_count = 10  
+        all_game_modes = set()
+        
+        async with aiohttp.ClientSession() as session:
+            while page_index <= max_pages and len(matches) < target_count:
+                battles_url = f'{self.RECENT_BATTLES_API}?{self.ROLE_ID_FIELD}={player_id_in}&pageIndex={page_index}&pageSize=20'
+                try:
+                    async with session.get(battles_url) as r:
+                        if r.status != 200:
+                            logger.error(f"HTTP错误: {r.status}")
+                            break
+                        battles_text = await r.text()
+                        try:
+                            battles_result = json.loads(battles_text)
+                        except json.JSONDecodeError:
+                            logger.error("JSON解析失败")
+                            break
+                        if battles_result.get('code') != 200 or not battles_result.get('data'):
+                            logger.error(f"API返回错误: {battles_result.get('code')}, msg: {battles_result.get('msg')}")
+                            break
+                        battles_data = battles_result.get('data', {}).get('list', [])
+                        if not battles_data:
+                            logger.info(f"第{page_index}页无数据")
+                            break
+                        
+                        logger.info(f"第{page_index}页获取到{len(battles_data)}条记录, 期望模式: {mode_codes}")
+                        if battles_data and page_index == 1:
+                            logger.info(f"第一条记录的键: {list(battles_data[0].keys())}")
+                            logger.info(f"第一条记录的subtype值: {battles_data[0].get('subtype', '不存在')}")
+                            logger.info(f"第一条记录的subtype类型: {type(battles_data[0].get('subtype'))}")
+                        
+                        for battle in battles_data:
+                            battle_tid = battle.get('subtype', '')
+                            battle_tid_str = str(battle_tid) if battle_tid else ''
+                            all_game_modes.add(battle_tid_str)
+
+                            
+                            logger.info(f"检查记录: subtype={battle_tid} (类型: {type(battle_tid)}), battleId={battle.get('battleId', '')}")
+                            
+                            if mode_codes:
+                                match_found = False
+                                for code in mode_codes:
+                                    code_str = str(code)
+                                    logger.info(f"  比较: '{battle_tid_str}' == '{code_str}' ? {battle_tid_str == code_str}")
+                                    if battle_tid_str == code_str:
+                                        match_found = True
+                                        break
+                                    if battle_tid_str == str(int(code_str)):
+                                        match_found = True
+                                        break
+                                    if isinstance(battle_tid, int) and int(code_str) == battle_tid:
+                                        match_found = True
+                                        break
+                                if not match_found:
+                                    logger.info(f"  跳过: subtype={battle_tid} 不在 {mode_codes} 中")
+                                    continue
+                                else:
+                                    logger.info(f"  匹配成功!")
+                            
+                            battle_info = {
+                                "battle_tid": battle_tid,
+                                "hero_id": str(battle.get('hero', {}).get('heroId', '')),
+                                "time": str(int(battle.get('battleEndTime', 0)/1000)),
+                                "map_name": battle.get('mapName', '未知'),
+                                "damage": battle.get('damage', 0),
+                                "rank": battle.get('rank', 0),
+                                "total_users_count": battle.get('totalPlayers', 0),
+                                "kill_times": battle.get('kill', 0),
+                                "grade": battle.get('rating', ''),
+                                "rating_delta": (battle.get('roundRankScore') or 0) - (battle.get('beginRankScore') or 0),
+                                "match_id": battle.get('battleId', '')
+                            }
+                            matches.append(battle_info)
+                            logger.info(f"  添加匹配记录, 当前共{len(matches)}条")
+                            
+                            if len(matches) >= target_count:
+                                break
+                            
+                        page_index += 1
+                except Exception as e:
+                    logger.error(f"获取战绩数据失败: {str(e)}")
+                    break
+        
+        logger.info(f"最终返回{len(matches)}条匹配记录")
+        logger.info(f"总共翻页: {page_index-1}页, 扫描到的模式: {all_game_modes}")
+        return {'status': 'ok', 'result': {'player_info': {'name': '未知', 'rating': '未知', 'level': '未知'}, 'matches': matches[:target_count], 'all_game_modes': list(all_game_modes)}}
+
+    @filter.command("yj")
+    async def naraka_search(self, event: AstrMessageEvent):
+        message = event.message_str.strip()
+        if not message:
+            yield event.plain_result("📖 使用说明\n━━━━━━━━━━━━\n命令：/yj [详细数据] [模式] <角色名>\n示例：/yj 冬眠岛\n示例：/yj 三排 冬眠岛\n示例：/yj 详细数据 冬眠岛\n示例：/yj 详细数据 三排 冬眠岛\n可用模式：单排、双排、三排、天选、匹配、天人\n━━━━━━━━━━━━")
+            return
+
+        clean_message = message
+        if clean_message.startswith('/yj '):
+            clean_message = clean_message[3:].strip()
+        elif clean_message.lower().startswith('yj '):
+            clean_message = clean_message[2:].strip()
+
+        if not clean_message:
+            yield event.plain_result("📖 使用说明\n━━━━━━━━━━━━\n命令：/yj [详细数据] [模式] <角色名>\n示例：/yj 冬眠岛\n示例：/yj 三排 冬眠岛\n示例：/yj 详细数据 冬眠岛\n示例：/yj 详细数据 三排 冬眠岛\n可用模式：单排、双排、三排、天选、匹配、天人\n━━━━━━━━━━━━")
+            return
+
+        player_name = clean_message
+        mode_filter = None
+        mode_display = '全部模式'
+        selected_mode_codes = []
+        detail_mode = False
+
+        parts = clean_message.split(' ', 2)
+        
+        if len(parts) >= 1 and parts[0] == '详细数据':
+            detail_mode = True
+            remaining = ' '.join(parts[1:]).strip() if len(parts) > 1 else ''
+            
+            if remaining:
+                sub_parts = remaining.split(' ', 1)
+                if len(sub_parts) == 2:
+                    first_part = sub_parts[0]
+                    second_part = sub_parts[1]
+                    
+                    if first_part in self.mode_aliases:
+                        mode_filter = first_part
+                        player_name = second_part
+                        selected_mode_codes = self.mode_aliases[first_part]
+                        mode_display = first_part
+                    elif first_part in self.mode_names.values():
+                        for code, name in self.mode_names.items():
+                            if name == first_part:
+                                mode_filter = first_part
+                                selected_mode_codes = [code]
+                                break
+                        player_name = second_part
+                        mode_display = first_part
+                    else:
+                        player_name = remaining
+                else:
+                    player_name = remaining
+        else:
+            parts = clean_message.split(' ', 1)
+            if len(parts) == 2:
+                first_part = parts[0]
+                second_part = parts[1]
+                
+                if first_part in self.mode_aliases:
+                    mode_filter = first_part
+                    player_name = second_part
+                    selected_mode_codes = self.mode_aliases[first_part]
+                    mode_display = first_part
+                elif first_part in self.mode_names.values():
+                    for code, name in self.mode_names.items():
+                        if name == first_part:
+                            mode_filter = first_part
+                            selected_mode_codes = [code]
+                            break
+                    player_name = second_part
+                    mode_display = first_part
+
+        logger.info(f"查询角色: {player_name}, 模式: {mode_display}, 详细模式: {detail_mode}, 模式代码: {selected_mode_codes}")
+
+        try:
+            role_data = await self.get_role_id(player_name)
+            player_id = role_data.get('role_id', 0)
+            player_name_display = role_data.get('role_name', player_name)
+            
+            logger.info(f"角色搜索结果: player_id={player_id}, player_name_display={player_name_display}")
+            
+            if not player_id:
+                yield event.plain_result(f"🔍 未找到角色\n━━━━━━━━━━━━\n角色名：{player_name}\n请确认角色名是否正确\n━━━━━━━━━━━━")
+                return
+
+            stats_data = None
+            # 先获取战绩数据，确定玩家有哪些模式
+            res = await self.get_result(player_id, '5000001', 'chuanyun', selected_mode_codes if (mode_filter and selected_mode_codes) else None)
+            result_data = res['result']
+            
+            matches = result_data.get('matches', [])
+            all_game_modes = result_data.get('all_game_modes', [])
+            
+            logger.info(f"战绩获取结果: matches数量={len(matches)}, all_game_modes={all_game_modes}")
+            
+            # 获取统计数据（指定模式时尝试获取）
+            if selected_mode_codes:
+                # 指定模式时，尝试获取统计数据（即使没有战绩数据）
+                # subtype的值和统计API需要的gameMode值一致
+                mode_for_stats = selected_mode_codes[0]
+                logger.info(f"获取统计数据: player_id={player_id}, gameMode={mode_for_stats}")
+                stats_data = await self.get_stats(player_id, mode_for_stats)
+                logger.info(f"统计数据获取结果: {stats_data is not None}")
+            else:
+                logger.info("未指定模式，不获取统计数据")
+            
+            # 如果指定了模式但没有匹配数据，不自动切换
+            no_mode_data = False
+            if mode_filter and selected_mode_codes and not matches:
+                no_mode_data = True
+                logger.info(f"指定模式{mode_filter}无数据")
+
+            msg_parts = []
+            msg_parts.append("⚔️ 永劫无间战绩 ⚔️")
+            msg_parts.append("━━━━━━━━━━━━━━━━━━━━")
+            msg_parts.append(f"👤 {player_name_display}")
+            msg_parts.append(f"🎮 {mode_display}")
+            
+            # 如果指定模式没有数据，显示提示
+            if no_mode_data:
+                msg_parts.append(f"💡 提示: {mode_filter}暂无数据")
+            
+            msg_parts.append("━━━━━━━━━━━━━━━━━━━━")
+
+            if stats_data:
+                grade_info = stats_data.get('grade', {})
+                grade_name = grade_info.get('gradeName', '未知')
+                grade_score = grade_info.get('gradeScore', 0)
+                dragon_kill = stats_data.get('dragonKill', 0)
+                
+                msg_parts.append(f"🏆 {grade_name} │ {grade_score}分")
+                msg_parts.append(f"🐉 屠龙: {dragon_kill}次")
+                
+                stats = stats_data.get('stats', [])
+                stats_dict = {s['name']: s['value'] for s in stats}
+                
+                msg_parts.append("📈 赛季统计")
+                msg_parts.append(f"   对局数: {stats_dict.get('对局数', 0)}")
+                msg_parts.append(f"   第一数: {stats_dict.get('第一数', 0)}")
+                msg_parts.append(f"   前五数: {stats_dict.get('前五数', 0)}")
+                msg_parts.append(f"   第一率: {stats_dict.get('第一率', '0%')}")
+                msg_parts.append(f"   前五率: {stats_dict.get('前五率', '0%')}")
+                msg_parts.append("━━━━━━━━━━━━━━━━━━━━")
+                msg_parts.append("⚔️ 战斗数据")
+                msg_parts.append(f"   场均击败: {stats_dict.get('场均击败', 0)}")
+                msg_parts.append(f"   场均助攻: {stats_dict.get('场均助攻', 0)}")
+                msg_parts.append(f"   场均治疗: {stats_dict.get('场均治疗', 0)}")
+                msg_parts.append(f"   场伤: {stats_dict.get('场伤', 0)}")
+                msg_parts.append(f"   K/D: {stats_dict.get('K/D', 0)}")
+                msg_parts.append(f"   最多振刀: {stats_dict.get('最多振刀', 0)}")
+                msg_parts.append("━━━━━━━━━━━━━━━━━━━━")
+                msg_parts.append("🔥 最高记录")
+                msg_parts.append(f"   最高击败: {stats_dict.get('最高击败', 0)}")
+                msg_parts.append(f"   最高助攻: {stats_dict.get('最高助攻', 0)}")
+                msg_parts.append(f"   最高治疗: {stats_dict.get('最高治疗', 0)}")
+                msg_parts.append(f"   最高伤害: {stats_dict.get('最高伤害', 0)}")
+                msg_parts.append(f"   场均生存: {stats_dict.get('场均生存', '0')}")
+                msg_parts.append("━━━━━━━━━━━━━━━━━━━━")
+
+            # 显示最近对战记录（有数据时显示）
+            if matches:
+                msg_parts.append("📊 最近对战记录")
+                msg_parts.append("")
+                for i, match in enumerate(matches[:10], 1):
+                    hero_name = self.hero_names.get(match['hero_id'], match['hero_id'])
+                    battle_tid = match.get('battle_tid', '')
+                    match_mode = self.mode_names.get(battle_tid, battle_tid if battle_tid else '未知')
+                    match_time = datetime.fromtimestamp(int(match['time'])).strftime('%m-%d %H:%M')
+                    map_name = match.get('map_name', '未知')
+                    damage = match.get('damage', 0)
+                    rank = match.get('rank', 0)
+                    kill_times = match.get('kill_times', 0)
+                    grade = match.get('grade', '无')
+                    rating_delta = match.get('rating_delta', 0)
+                    match_id = match.get('match_id', '')
+
+                    delta_str = f"+{rating_delta}" if rating_delta > 0 else str(rating_delta)
+                    msg_parts.append(f"第{i}场 │ {match_time} │ {map_name}")
+                    msg_parts.append(f"     │ {hero_name} │ {match_mode}")
+                    msg_parts.append(f"     │ 排名{rank} │ 击杀{kill_times} │ 伤害{damage}")
+                    msg_parts.append(f"     │ {grade}级 │ {delta_str}分")
+
+                    if detail_mode and match_id:
+                        detail_data = await self.get_battle_detail(player_id, match_id)
+                        if detail_data:
+                            data_list = detail_data.get('dataList', [])
+                            data_dict = {item['name']: item['value'] for item in data_list}
+                            
+                            msg_parts.append(f"     ├─ 生存: {data_dict.get('生存', '0')} │ 治疗: {data_dict.get('治疗', '0')}")
+                            msg_parts.append(f"     ├─ 击杀: {data_dict.get('击败', '0')} │ 伤害: {data_dict.get('伤害', '0')}")
+                            msg_parts.append(f"     ├─ 振刀: {data_dict.get('振刀', '0')} │ 招式命中: {data_dict.get('招式命中', '0')}")
+                            msg_parts.append(f"     ├─ 释放技能: {data_dict.get('释放技能', '0')} │ 爆头: {data_dict.get('爆头数', '0')}")
+                            msg_parts.append(f"     ├─ 救援/复活: {data_dict.get('救援/复活', '0')} │ 开堆: {data_dict.get('开堆', '0')}")
+                            msg_parts.append(f"     ├─ 移动距离: {data_dict.get('移动距离', '0')} │ 暗潮币: {data_dict.get('消耗暗潮币', '0')}")
+                            
+                            weapons = detail_data.get('weapons', [])
+                            if weapons:
+                                weapon_info = []
+                                for w in weapons:
+                                    w_name = w.get('weaponName', '')
+                                    w_damage = w.get('damage', 0)
+                                    w_kill = w.get('kill', 0)
+                                    w_percent = w.get('percent', 0)
+                                    weapon_info.append(f"{w_name}(击杀{w_kill}, 伤害{w_damage}, {w_percent:.1%})")
+                                msg_parts.append(f"     ├─ 武器: {' | '.join(weapon_info)}")
+                            
+                            soul_items = detail_data.get('soulItems', [])
+                            if soul_items:
+                                soul_info = []
+                                for s in soul_items:
+                                    s_name = s.get('soulItemName', '')
+                                    s_level = s.get('soulItemLevel', 0)
+                                    soul_info.append(f"{s_name}(Lv.{s_level})")
+                                msg_parts.append(f"     ├─ 魂玉: {' | '.join(soul_info)}")
+                            
+                            armor = detail_data.get('armor', {})
+                            if armor:
+                                armor_level = armor.get('armorLevel', 0)
+                                msg_parts.append(f"     ├─ 护甲: {armor_level}级")
+                            
+                            honors = detail_data.get('honorTitles', [])
+                            if honors:
+                                honor_names = [h.get('honorName', '') for h in honors[:5]]
+                                if honor_names:
+                                    msg_parts.append(f"     ├─ 称号: {'、'.join(honor_names)}")
+                            
+                            team_data = await self.get_battle_detail_team(player_id, match_id)
+                            if team_data:
+                                teammates = team_data.get('teammates', [])
+                                if teammates:
+                                    msg_parts.append(f"     └─ 队友数据:")
+                                    for idx, teammate in enumerate(teammates):
+                                        hero = teammate.get('hero', {})
+                                        hero_name = hero.get('heroName', '未知')
+                                        role = teammate.get('role', {})
+                                        role_name = role.get('roleName', '未知')
+                                        
+                                        tm_data_list = teammate.get('dataList', [])
+                                        tm_data_dict = {item['name']: item['value'] for item in tm_data_list}
+                                        
+                                        prefix = "     " if idx == len(teammates) - 1 else "     "
+                                        msg_parts.append(f"{prefix}   ├─ {hero_name}({role_name}): 击杀{tm_data_dict.get('击败', '0')}, 伤害{tm_data_dict.get('伤害', '0')}, 治疗{tm_data_dict.get('治疗', '0')}")
+
+                    msg_parts.append("━━━━━━━━━━━━━━━━━━━━")
+            
+            # 不再显示暂无数据提示
+
+            msg_parts.append("✅ 查询完成")
+            msg_parts.append("")
+            msg_parts.append("💡 使用 /yj [模式] <角色名> 查询战绩")
+
+            yield event.plain_result("\n".join(msg_parts))
+
+        except Exception as e:
+            logger.error(f"查询失败: {str(e)}")
+            yield event.plain_result(f"❌ 查询失败\n━━━━━━━━━━━━\n错误信息：{str(e)}\n━━━━━━━━━━━━")
+
+    async def terminate(self):
+        logger.info("永劫无间战绩查询插件已卸载")
+
+plugin = NarakaSearchPlugin
